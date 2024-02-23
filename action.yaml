@@ -1,0 +1,82 @@
+name: "Publish mkdocs"
+description: "Publish documentation generated via mkdocs/mike/repo-config."
+author: "Frequenz Energy-as-a-Service GmbH"
+
+# Refer to the following link(s) for more information on inputs:
+# https://docs.github.com/en/actions/creating-actions/metadata-syntax-for-github-actions#inputs
+inputs:
+  python_version:
+    description: >
+      The Python version to use. This is passed to the `actions/setup-python`.
+    required: true
+  mkdocs_dependencies:
+    description: >
+      The dependencies needed to run mkdocs, mike and repo-config.
+    required: false
+    default: ".[dev-mkdocs]"
+  github_token:
+    description: >
+      The GitHub token to use to fetch tag and branches information for the
+      repository using the GitHub API.
+    required: false
+    default: ${{ github.token }}
+
+
+# Refer to the following link(s) for more information on the composite run steps:
+# https://docs.github.com/en/actions/creating-actions/metadata-syntax-for-github-actions#runs
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Python
+      uses: frequenz-floss/setup-python-with-deps@v0.x.x
+      with:
+        python-version: ${{ input.python_version }}
+        dependencies: ${{ input.mkdocs_dependencies }}
+
+    - name: Calculate and check version
+      id: mike-version
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_REPO: ${{ github.repository }}
+        GIT_REF: ${{ github.ref }}
+        GIT_SHA: ${{ github.sha }}
+      run: |
+        python -m frequenz.repo.config.cli.version.mike.info
+
+    - name: Fetch the gh-pages branch
+      if: steps.mike-version.outputs.version
+      shell: bash
+      run: git fetch origin gh-pages --depth=1
+
+    - name: Build site
+      if: steps.mike-version.outputs.version
+      shell: bash
+      env:
+        VERSION: ${{ steps.mike-version.outputs.version }}
+        TITLE: ${{ steps.mike-version.outputs.title }}
+        ALIASES: ${{ steps.mike-version.outputs.aliases }}
+        # This is not ideal, we need to define all these variables here
+        # because we need to calculate all the repository version information
+        # to be able to show the correct versions in the documentation when
+        # building it.
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_REPO: ${{ github.repository }}
+        GIT_REF: ${{ github.ref }}
+        GIT_SHA: ${{ github.sha }}
+      run: |
+        mike deploy --update-aliases --title "$TITLE" "$VERSION" $ALIASES
+
+    - name: Sort site versions
+      if: steps.mike-version.outputs.version
+      shell: bash
+      run: |
+        git checkout gh-pages
+        python -m frequenz.repo.config.cli.version.mike.sort versions.json
+        git commit -a -m "Sort versions.json"
+
+    - name: Publish site
+      if: steps.mike-version.outputs.version
+      shell: bash
+      run: |
+        git push origin gh-pages
